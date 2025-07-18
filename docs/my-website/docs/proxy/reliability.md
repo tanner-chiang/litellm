@@ -117,7 +117,7 @@ response = router.completion(
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -628,7 +628,7 @@ litellm_settings:
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gpt-4",
   "messages": [
     {
@@ -655,7 +655,7 @@ Check if your fallbacks are working as expected.
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -674,7 +674,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -693,7 +693,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -892,7 +892,7 @@ litellm_settings:
 
 This will default to claude-opus in case any model fails.
 
-A model-specific fallbacks (e.g. {"gpt-3.5-turbo-small": ["claude-opus"]}) overrides default fallback.
+A model-specific fallbacks (e.g. `{"gpt-3.5-turbo-small": ["claude-opus"]}`) overrides default fallback.
 
 ### EU-Region Filtering (Pre-Call Checks)
 
@@ -1007,7 +1007,34 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 }'
 ```
 
-### Disable Fallbacks per key
+### Disable Fallbacks (Per Request/Key)
+
+
+<Tabs>
+
+<TabItem value="request" label="Per Request">
+
+You can disable fallbacks per key by setting `disable_fallbacks: true` in your request body.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "List 5 important events in the XIX century"
+        }
+    ],
+    "model": "gpt-3.5-turbo",
+    "disable_fallbacks": true # 👈 DISABLE FALLBACKS
+}'
+```
+
+</TabItem>
+
+<TabItem value="key" label="Per Key">
 
 You can disable fallbacks per key by setting `disable_fallbacks: true` in your key metadata.
 
@@ -1021,3 +1048,6 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
     }
 }'
 ```
+
+</TabItem>
+</Tabs>

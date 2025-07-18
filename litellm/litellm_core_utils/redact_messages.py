@@ -53,32 +53,50 @@ def perform_redaction(model_call_details: dict, result):
         and "complete_streaming_response" in model_call_details
     ):
         _streaming_response = model_call_details["complete_streaming_response"]
-        for choice in _streaming_response.choices:
-            if isinstance(choice, litellm.Choices):
-                choice.message.content = "redacted-by-litellm"
-            elif isinstance(choice, litellm.utils.StreamingChoices):
-                choice.delta.content = "redacted-by-litellm"
-
-    # Redact result
-    if result is not None and isinstance(result, litellm.ModelResponse):
-        _result = copy.deepcopy(result)
-        if hasattr(_result, "choices") and _result.choices is not None:
-            for choice in _result.choices:
+        if hasattr(_streaming_response, "choices"):
+            for choice in _streaming_response.choices:
                 if isinstance(choice, litellm.Choices):
                     choice.message.content = "redacted-by-litellm"
                 elif isinstance(choice, litellm.utils.StreamingChoices):
                     choice.delta.content = "redacted-by-litellm"
+        elif hasattr(_streaming_response, "output"):
+            # Handle ResponsesAPIResponse format
+            for output_item in _streaming_response.output:
+                if hasattr(output_item, "content") and isinstance(
+                    output_item.content, list
+                ):
+                    for content_part in output_item.content:
+                        if hasattr(content_part, "text"):
+                            content_part.text = "redacted-by-litellm"
+
+    # Redact result
+    if result is not None:
+        _result = copy.deepcopy(result)
+        if isinstance(_result, litellm.ModelResponse):
+            if hasattr(_result, "choices") and _result.choices is not None:
+                for choice in _result.choices:
+                    if isinstance(choice, litellm.Choices):
+                        choice.message.content = "redacted-by-litellm"
+                    elif isinstance(choice, litellm.utils.StreamingChoices):
+                        choice.delta.content = "redacted-by-litellm"
+        elif isinstance(_result, litellm.ResponsesAPIResponse):
+            if hasattr(_result, "output"):
+                for output_item in _result.output:
+                    if hasattr(output_item, "content") and isinstance(output_item.content, list):
+                        for content_part in output_item.content:
+                            if hasattr(content_part, "text"):
+                                content_part.text = "redacted-by-litellm"
+        elif isinstance(_result, litellm.EmbeddingResponse):
+            if hasattr(_result, "data") and _result.data is not None:
+                _result.data = []
+        else:
+            return {"text": "redacted-by-litellm"}
         return _result
-    else:
-        return {"text": "redacted-by-litellm"}
 
 
-def redact_message_input_output_from_logging(
-    model_call_details: dict, result, input: Optional[Any] = None
-):
+def should_redact_message_logging(model_call_details: dict) -> bool:
     """
-    Removes messages, prompts, input, response from logging. This modifies the data in-place
-    only redacts when litellm.turn_off_message_logging == True
+    Determine if message logging should be redacted.
     """
     _request_headers = (
         model_call_details.get("litellm_params", {}).get("metadata", {}) or {}
@@ -86,25 +104,48 @@ def redact_message_input_output_from_logging(
 
     request_headers = _request_headers.get("headers", {})
 
+    possible_request_headers = [
+        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
+        "x-litellm-enable-message-redaction",  # new header
+    ]
+
+    is_redaction_enabled_via_header = False
+    for header in possible_request_headers:
+        if bool(request_headers.get(header, False)):
+            is_redaction_enabled_via_header = True
+            break
+
     # check if user opted out of logging message/response to callbacks
     if (
         litellm.turn_off_message_logging is not True
-        and request_headers.get("litellm-enable-message-redaction", False) is not True
+        and is_redaction_enabled_via_header is not True
         and _get_turn_off_message_logging_from_dynamic_params(model_call_details)
         is not True
     ):
-        return result
+        return False
 
-    if request_headers and request_headers.get(
-        "litellm-disable-message-redaction", False
+    if request_headers and bool(
+        request_headers.get("litellm-disable-message-redaction", False)
     ):
-        return result
+        return False
 
     # user has OPTED OUT of message redaction
     if _get_turn_off_message_logging_from_dynamic_params(model_call_details) is False:
-        return result
+        return False
 
-    return perform_redaction(model_call_details, result)
+    return True
+
+
+def redact_message_input_output_from_logging(
+    model_call_details: dict, result, input: Optional[Any] = None
+) -> Any:
+    """
+    Removes messages, prompts, input, response from logging. This modifies the data in-place
+    only redacts when litellm.turn_off_message_logging == True
+    """
+    if should_redact_message_logging(model_call_details):
+        return perform_redaction(model_call_details, result)
+    return result
 
 
 def _get_turn_off_message_logging_from_dynamic_params(

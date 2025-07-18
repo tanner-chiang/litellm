@@ -8,7 +8,7 @@ from typing import List, Optional
 import litellm
 
 logger = logging.getLogger(__name__)
-
+from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
 
 ILLEGAL_DISPLAY_PARAMS = [
     "messages",
@@ -36,6 +36,7 @@ def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
     """
     Clean the endpoint data for display to users.
     """
+    endpoint_data.pop("litellm_logging_obj", None)
     return (
         {k: v for k, v in endpoint_data.items() if k not in ILLEGAL_DISPLAY_PARAMS}
         if details is not False
@@ -62,10 +63,28 @@ def filter_deployments_by_id(
     return filtered_deployments
 
 
+async def run_with_timeout(task, timeout):
+    try:
+        return await asyncio.wait_for(task, timeout)
+    except asyncio.TimeoutError:
+        task.cancel()
+        # Only cancel child tasks of the current task
+        current_task = asyncio.current_task()
+        for t in asyncio.all_tasks():
+            if t != current_task:
+                t.cancel()
+        try:
+            await asyncio.wait_for(task, 0.1)  # Give 100ms for cleanup
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+        return {"error": "Timeout exceeded"}
+
+
 async def _perform_health_check(model_list: list, details: Optional[bool] = True):
     """
     Perform a health check for each model in the list.
     """
+
     tasks = []
     for model in model_list:
         litellm_params = model["litellm_params"]
@@ -74,16 +93,21 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
         litellm_params = _update_litellm_params_for_health_check(
             model_info, litellm_params
         )
-        tasks.append(
+        timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
+
+        task = run_with_timeout(
             litellm.ahealth_check(
-                litellm_params,
+                model["litellm_params"],
                 mode=mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
-            )
+            ),
+            timeout,
         )
 
-    results = await asyncio.gather(*tasks)
+        tasks.append(task)
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     healthy_endpoints = []
     unhealthy_endpoints = []

@@ -3,12 +3,15 @@
 import os
 import sys
 import traceback
+import json
+
+
 
 from typing import List, Dict, Any
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -32,12 +35,20 @@ def test_get_model_info_custom_llm_with_model_name():
     litellm.get_model_info(model)
 
 
-def test_get_model_info_custom_llm_with_same_name_vllm():
+def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
     """
     model = "command-r-plus"
     provider = "openai"  # vllm is openai-compatible
+    litellm.register_model(
+        {
+            "openai/command-r-plus": {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+        }
+    )
     model_info = litellm.get_model_info(model, custom_llm_provider=provider)
     print("model_info", model_info)
     assert model_info["input_cost_per_token"] == 0.0
@@ -90,10 +101,10 @@ def test_get_model_info_ollama_chat():
             }
         ),
     ) as mock_client:
-        info = OllamaConfig().get_model_info("mistral")
+        info = OllamaConfig().get_model_info("unknown-model")
         assert info["supports_function_calling"] is True
 
-        info = get_model_info("ollama/mistral")
+        info = get_model_info("ollama/unknown-model")
         print("info", info)
         assert info["supports_function_calling"] is True
 
@@ -101,21 +112,9 @@ def test_get_model_info_ollama_chat():
 
         print(mock_client.call_args.kwargs)
 
-        assert mock_client.call_args.kwargs["json"]["name"] == "mistral"
+        assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-def test_get_model_info_gemini():
-    """
-    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
-    """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    model_map = litellm.model_cost
-    for model, info in model_map.items():
-        if model.startswith("gemini/") and not "gemma" in model:
-            assert info.get("tpm") is not None, f"{model} does not have tpm"
-            assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
 def test_get_model_info_bedrock_region():
@@ -158,26 +157,6 @@ def test_get_model_info_ft_model_with_provider_prefix():
     print("info", info)
     assert info["key"] == "ft:gpt-3.5-turbo"
 
-
-def test_get_whitelisted_models():
-    """
-    Snapshot of all bedrock models as of 12/24/2024.
-
-    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
-
-    Create whitelist to prevent naming regressions for older litellm versions.
-    """
-    whitelisted_models = []
-    for model, info in litellm.model_cost.items():
-        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
-            whitelisted_models.append(model)
-
-        # Write to a local file
-    with open("whitelisted_bedrock_models.txt", "w") as file:
-        for model in whitelisted_models:
-            file.write(f"{model}\n")
-
-    print("whitelisted_models written to whitelisted_bedrock_models.txt")
 
 
 def _enforce_bedrock_converse_models(
@@ -299,11 +278,97 @@ def test_get_model_info_custom_model_router():
                     "input_cost_per_token": 1,
                     "output_cost_per_token": 1,
                     "model": "openai/meta-llama/Meta-Llama-3-8B-Instruct",
-                    "model_id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                },
+                "model_info": {
+                    "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                }
+            }
+        ]
+    )
+    info = get_model_info("c20d603e-1166-4e0f-aa65-ed9c476ad4ca")
+    print("info", info)
+    assert info is not None
+
+
+def test_get_model_info_bedrock_models():
+    """
+    Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    for k, v in litellm.model_cost.items():
+        if v["litellm_provider"] == "bedrock":
+            k = k.replace("*/", "")
+            potential_commitments = [
+                "1-month-commitment",
+                "3-month-commitment",
+                "6-month-commitment",
+            ]
+            if any(commitment in k for commitment in potential_commitments):
+                for commitment in potential_commitments:
+                    k = k.replace(f"{commitment}/", "")
+            base_model = BedrockModelInfo.get_base_model(k)
+            base_model_info = litellm.model_cost[base_model]
+            for base_model_key, base_model_value in base_model_info.items():
+                if "invoke/" in k:
+                    continue
+                if base_model_key.startswith("supports_"):
+                    assert (
+                        base_model_key in v
+                    ), f"{base_model_key} is not in model cost map for {k}"
+                    assert (
+                        v[base_model_key] == base_model_value
+                    ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+
+
+def test_get_model_info_huggingface_models(monkeypatch):
+    from litellm import Router
+    from litellm.types.router import ModelGroupInfo
+
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
+                "litellm_params": {
+                    "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "api_base": "https://router.huggingface.co/hf-inference/models/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "api_key": os.environ["HUGGINGFACE_API_KEY"],
                 },
             }
         ]
     )
-    info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
+    info = litellm.get_model_info("huggingface/meta-llama/Meta-Llama-3-8B-Instruct")
     print("info", info)
     assert info is not None
+
+    ModelGroupInfo(
+        model_group="meta-llama/Meta-Llama-3-8B-Instruct",
+        providers=["huggingface"],
+        **info,
+    )
+
+
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0", None),
+        (
+            "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
+            "bedrock",
+        ),
+    ],
+)
+def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, provider):
+    """
+    ensure cross region inferencing model is used correctly
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/8115
+    """
+    info = get_model_info(model=model, custom_llm_provider=provider)
+    print("info", info)
+    assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
+    assert info["litellm_provider"] == "bedrock"

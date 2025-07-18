@@ -38,7 +38,11 @@ def generate_iam_token(api_key=None, **params) -> str:
         headers = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
-            api_key = get_secret_str("WX_API_KEY") or get_secret_str("WATSONX_API_KEY")
+            api_key = (
+                get_secret_str("WX_API_KEY")
+                or get_secret_str("WATSONX_API_KEY")
+                or get_secret_str("WATSONX_APIKEY")
+            )
         if api_key is None:
             raise ValueError("API key is required")
         headers["Accept"] = "application/json"
@@ -165,6 +169,7 @@ class IBMWatsonXMixin:
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
@@ -177,12 +182,12 @@ class IBMWatsonXMixin:
             return {**default_headers, **headers}
         token = cast(
             Optional[str],
-            optional_params.get("token")
-            or get_secret_str("WATSONX_ZENAPIKEY")
-            or get_secret_str("WATSONX_TOKEN"),
+            optional_params.get("token") or get_secret_str("WATSONX_TOKEN"),
         )
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        elif zen_api_key := get_secret_str("WATSONX_ZENAPIKEY"):
+            headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
             token = _generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
@@ -275,3 +280,13 @@ class IBMWatsonXMixin:
         return WatsonXCredentials(
             api_key=api_key, api_base=api_base, token=cast(Optional[str], token)
         )
+
+    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
+        payload: dict = {}
+        if model.startswith("deployment/"):
+            return (
+                {}
+            )  # Deployment models do not support 'space_id' or 'project_id' in their payload
+        payload["model_id"] = model
+        payload["project_id"] = api_params["project_id"]
+        return payload
