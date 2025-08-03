@@ -34,6 +34,7 @@ class SupportedGuardrailIntegrations(Enum):
     AIM = "aim"
     PANGEA = "pangea"
     LASSO = "lasso"
+    PILLAR = "pillar"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
@@ -349,6 +350,15 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
+class PillarGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Pillar Security guardrail"""
+
+    on_flagged_action: Optional[str] = Field(
+        default="monitor",
+        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+    )
+
+
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
@@ -434,6 +444,7 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
+    PillarGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
@@ -480,6 +491,8 @@ class GuardrailEventHooks(str, Enum):
     post_call = "post_call"
     during_call = "during_call"
     logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
 
 
 class DynamicGuardrailParams(TypedDict):
